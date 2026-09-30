@@ -222,6 +222,8 @@ struct ScenarioDefinition {
     std::vector<ScenarioEvent> events;
 };
 
+class IndustrialWorld;
+
 std::string to_string(EvidenceKind kind);
 ScenarioDefinition load_scenario_file(std::string_view path, std::string& error);
 bool run_scenario_events(IndustrialWorld& world,
