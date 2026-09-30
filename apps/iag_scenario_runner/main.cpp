@@ -188,7 +188,7 @@ bool write_replay_verification(const std::filesystem::path& output_dir,
                                const RunSummary& second,
                                bool matches) {
     const std::string content =
-        "{\n  \"verified\":" + (matches ? "true" : "false") +
+        std::string{"{\n  \"verified\":"} + (matches ? "true" : "false") +
         ",\n  \"initial_digest\":" + quote(first.initial_digest) +
         ",\n  \"replay_initial_digest\":" + quote(second.initial_digest) +
         ",\n  \"final_digest\":" + quote(first.final_digest) +
