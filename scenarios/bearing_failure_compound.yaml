@@ -1,0 +1,24 @@
+scenario: bearing_failure_compound
+seed: 99117
+
+initial:
+  world_fixture: enterprise_v1
+
+events:
+  - at: 00:00:00
+    type: machine_condition
+    machine: M-12
+    vibration_rms: 6.1
+  - at: 00:30:00
+    type: machine_condition
+    machine: M-12
+    vibration_rms: 8.7
+  - at: 00:45:00
+    type: traffic_delay
+    route: R-7
+    delay_minutes: 45
+  - at: 01:00:00
+    type: energy_tariff
+    site: SITE-01
+    multiplier: 2.2
+
