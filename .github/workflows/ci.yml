@@ -18,3 +18,25 @@ jobs:
         run: cmake --build build --config Debug --parallel 2
       - name: Test
         run: ctest --test-dir build -C Debug --output-on-failure
+      - name: Canonical scenario smoke
+        run: build\Debug\iag_scenario_runner.exe scenarios\bearing_failure_compound.yaml --output artifacts\ci
+      - name: Verify scenario artifacts
+        shell: pwsh
+        run: |
+          $required = @(
+            "world_before.json",
+            "evidence.jsonl",
+            "findings.jsonl",
+            "candidates.json",
+            "simulation_results.json",
+            "decision.json",
+            "execution_receipt.json",
+            "world_after.json",
+            "replay_manifest.json",
+            "report.md"
+          )
+          foreach ($name in $required) {
+            if (-not (Test-Path "artifacts\ci\$name")) {
+              throw "Missing scenario artifact: $name"
+            }
+          }

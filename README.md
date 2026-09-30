@@ -30,7 +30,7 @@ systems, and explicit about unknown, stale, contested, and predicted state.
 The repository is dependency-free and targets C++23.
 
 ~~~powershell
-cmake -S . -B build -G "Visual Studio 17 2022"
+cmake -S . -B build -G "Visual Studio 18 2026"
 cmake --build build --config Debug
 ctest --test-dir build -C Debug --output-on-failure
 ~~~
@@ -58,4 +58,3 @@ world-transition artifact set under artifacts\bearing_failure_compound.
 
 See the engineering requirements in docs/engineering/requirements.md and the
 user-supplied end-to-end specification for the full roadmap.
-
