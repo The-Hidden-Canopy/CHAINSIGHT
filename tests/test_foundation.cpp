@@ -100,9 +100,48 @@ int main() {
           "energy evidence updates tariff belief");
     check(evidence.front().quality == iag::Quality::Valid,
           "evidence quality is explicit");
+    check(evidence.at(0).source_sequence == 1 &&
+              evidence.at(1).source_sequence == 2,
+          "source sequences are tracked independently");
     check(iag::evidence_jsonl(evidence).find("\"sequence\":1") !=
               std::string::npos,
           "evidence output preserves sequence");
+
+    auto rejected_quality_world = fixture_world;
+    auto rejected_quality_scenario = scenario;
+    rejected_quality_scenario.events.at(1).quality = iag::Quality::Stale;
+    std::vector<iag::EvidenceItem> rejected_quality_evidence;
+    std::vector<iag::Finding> rejected_quality_findings;
+    std::string rejected_quality_error;
+    check(!iag::run_scenario_events(
+              rejected_quality_world, rejected_quality_scenario,
+              rejected_quality_evidence, rejected_quality_findings,
+              rejected_quality_error),
+          "stale evidence is rejected");
+    check(rejected_quality_error.find("EVIDENCE_QUALITY_BLOCKED") == 0,
+          "stale evidence has an explicit quality error");
+    check(rejected_quality_world.revision() == fixture_world.revision(),
+          "quality rejection is atomic");
+
+    auto contradictory_scenario = scenario;
+    contradictory_scenario.events = {
+        iag::ScenarioEvent{0, iag::EvidenceKind::MachineCondition, {"M-12"},
+                           "sim.telemetry", 1, iag::Quality::Valid, 6.1, 0.0},
+        iag::ScenarioEvent{0, iag::EvidenceKind::MachineCondition, {"M-12"},
+                           "sim.maintenance", 1, iag::Quality::Valid, 7.1, 0.0}};
+    auto contradictory_world = fixture_world;
+    std::vector<iag::EvidenceItem> contradictory_evidence;
+    std::vector<iag::Finding> contradictory_findings;
+    std::string contradictory_error;
+    check(!iag::run_scenario_events(
+              contradictory_world, contradictory_scenario,
+              contradictory_evidence, contradictory_findings,
+              contradictory_error),
+          "contradictory evidence is rejected");
+    check(contradictory_error.find("EVIDENCE_CONTRADICTION") == 0,
+          "contradiction has an explicit error");
+    check(contradictory_world.revision() == fixture_world.revision(),
+          "contradiction rejection is atomic");
 
     const auto planning =
         iag::generate_plan_candidates(scenario_world, findings);
@@ -152,6 +191,40 @@ int main() {
         iag::govern(scenario_world, planning.candidates.at(3), request);
     check(denied_decision.action == iag::GovernanceAction::Deny,
           "denied candidate cannot be governed");
+    const auto denied_execution =
+        adapter.dispatch(scenario_world, denied_decision, request);
+    check(denied_execution.status == "BLOCKED_BY_GOVERNANCE",
+          "denied action is blocked before adapter execution");
+    check(adapter.external_call_count() == 1,
+          "denied action does not reach the external adapter");
+
+    auto mismatch_world = fixture_world;
+    std::vector<iag::EvidenceItem> mismatch_evidence;
+    std::vector<iag::Finding> mismatch_findings;
+    std::string mismatch_error;
+    check(iag::run_scenario_events(mismatch_world, scenario, mismatch_evidence,
+                                   mismatch_findings, mismatch_error),
+          "mismatch scenario admits");
+    const auto mismatch_planning =
+        iag::generate_plan_candidates(mismatch_world, mismatch_findings);
+    const auto& mismatch_candidate = mismatch_planning.candidates.at(2);
+    const auto& mismatch_step = mismatch_candidate.steps.front();
+    const iag::ActionRequest mismatch_request{
+        "AR-MISMATCH", "test", mismatch_step.action, mismatch_candidate.id,
+        mismatch_step.subject, mismatch_step.destination, mismatch_step.quantity,
+        mismatch_world.revision(), "verify mismatch"};
+    const auto mismatch_decision =
+        iag::govern(mismatch_world, mismatch_candidate, mismatch_request);
+    iag::SimulatedExecutionAdapter mismatch_adapter;
+    mismatch_adapter.set_verification_override(false);
+    const auto mismatch_execution =
+        mismatch_adapter.dispatch(mismatch_world, mismatch_decision,
+                                  mismatch_request);
+    check(mismatch_execution.dispatched && !mismatch_execution.verified,
+          "verification mismatch is observable");
+    check(mismatch_execution.replan_required &&
+              mismatch_execution.status == "VERIFY_MISMATCH",
+          "verification mismatch requires replan");
 
     std::cout << "world, evidence, planning, and execution tests passed\n";
 }

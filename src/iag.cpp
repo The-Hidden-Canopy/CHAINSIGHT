@@ -639,6 +639,16 @@ bool parse_bool(const std::string& value, bool& ok) {
     return false;
 }
 
+Quality parse_quality(const std::string& value, bool& ok) {
+    if (value == "valid") { ok = true; return Quality::Valid; }
+    if (value == "uncertain") { ok = true; return Quality::Uncertain; }
+    if (value == "stale") { ok = true; return Quality::Stale; }
+    if (value == "invalid") { ok = true; return Quality::Invalid; }
+    if (value == "blocked") { ok = true; return Quality::Blocked; }
+    ok = false;
+    return Quality::Invalid;
+}
+
 bool parse_integer(const std::string& value, std::int64_t& result) {
     try {
         std::size_t used = 0;
@@ -944,6 +954,13 @@ ScenarioDefinition load_scenario_file(std::string_view path, std::string& error)
             }
         } else if (line.rfind("world_fixture:", 0) == 0) {
             scenario.world_fixture = after_colon(line);
+        } else if (line.rfind("freshness_window_minutes:", 0) == 0) {
+            std::int64_t freshness = 0;
+            if (!parse_integer(after_colon(line), freshness) || freshness < 0) {
+                error = "INVALID_FRESHNESS_WINDOW";
+                return {};
+            }
+            scenario.freshness_window_minutes = freshness;
         } else if (line.rfind("- at:", 0) == 0) {
             flush();
             pending = ScenarioEvent{};
@@ -985,6 +1002,20 @@ ScenarioDefinition load_scenario_file(std::string_view path, std::string& error)
             pending.subject = ObjectId{after_colon(line)};
         } else if (line.rfind("site:", 0) == 0 && have_pending) {
             pending.subject = ObjectId{after_colon(line)};
+        } else if (line.rfind("source:", 0) == 0 && have_pending) {
+            pending.source = after_colon(line);
+        } else if (line.rfind("source_sequence:", 0) == 0 && have_pending) {
+            if (!parse_revision(after_colon(line), pending.source_sequence)) {
+                error = "INVALID_SOURCE_SEQUENCE";
+                return {};
+            }
+        } else if (line.rfind("quality:", 0) == 0 && have_pending) {
+            bool quality_ok = false;
+            pending.quality = parse_quality(after_colon(line), quality_ok);
+            if (!quality_ok) {
+                error = "INVALID_EVIDENCE_QUALITY";
+                return {};
+            }
         } else if (line.rfind("vibration_rms:", 0) == 0 && have_pending) {
             bool ok = false;
             pending.value = parse_number(after_colon(line), ok);
@@ -1016,36 +1047,110 @@ ScenarioDefinition load_scenario_file(std::string_view path, std::string& error)
     return scenario;
 }
 
+bool validate_evidence(const IndustrialWorld& world,
+                       const EvidenceItem& item,
+                       const std::vector<EvidenceItem>& admitted,
+                       SimMinute freshness_window_minutes,
+                       std::string& error) {
+    if (item.id.empty() || item.source.empty()) {
+        error = "EVIDENCE_SOURCE_MISSING";
+        return false;
+    }
+    if (item.sequence != admitted.size() + 1 || item.source_sequence == 0) {
+        error = "EVIDENCE_SEQUENCE_INVALID:" + item.id;
+        return false;
+    }
+    if (item.quality != Quality::Valid) {
+        error = "EVIDENCE_QUALITY_BLOCKED:" + item.id + ":" +
+                to_string(item.quality);
+        return false;
+    }
+    if (freshness_window_minutes < 0 ||
+        item.observed_at < world.state().now - freshness_window_minutes) {
+        error = "EVIDENCE_STALE:" + item.id;
+        return false;
+    }
+    if (item.raw_hash.empty()) {
+        error = "EVIDENCE_RAW_HASH_MISSING:" + item.id;
+        return false;
+    }
+    const auto expected_hash =
+        digest(item.source + "|" + item.subject.value + "|" +
+               std::to_string(item.observed_at) + "|" +
+               std::to_string(item.source_sequence) + "|" +
+               std::to_string(item.value));
+    if (item.raw_hash != expected_hash) {
+        error = "EVIDENCE_RAW_HASH_MISMATCH:" + item.id;
+        return false;
+    }
+
+    for (const auto& existing : admitted) {
+        if (existing.source == item.source &&
+            existing.source_sequence >= item.source_sequence) {
+            error = "EVIDENCE_SOURCE_SEQUENCE_REPLAY:" + item.id;
+            return false;
+        }
+        if (existing.kind == item.kind && existing.subject == item.subject &&
+            existing.observed_at == item.observed_at &&
+            existing.value != item.value) {
+            error = "EVIDENCE_CONTRADICTION:" + item.id;
+            return false;
+        }
+    }
+    return true;
+}
+
 bool run_scenario_events(IndustrialWorld& world,
                          const ScenarioDefinition& scenario,
                          std::vector<EvidenceItem>& evidence,
                          std::vector<Finding>& findings,
                          std::string& error) {
+    IndustrialWorld candidate_world = world;
+    std::vector<EvidenceItem> admitted;
+    std::map<std::string, std::uint64_t> source_sequences;
     std::uint64_t sequence = 0;
     for (const auto& event : scenario.events) {
+        if (event.at < candidate_world.state().now) {
+            error = "SCENARIO_TIME_REGRESSION";
+            return false;
+        }
         ++sequence;
         EvidenceItem item;
         item.id = "E-" + std::to_string(sequence);
-        item.source = event.kind == EvidenceKind::MachineCondition
-                          ? "sim.telemetry"
-                          : event.kind == EvidenceKind::TrafficDelay
-                                ? "sim.traffic"
-                                : "sim.energy";
+        item.source = event.source.empty()
+                          ? (event.kind == EvidenceKind::MachineCondition
+                                 ? "sim.telemetry"
+                                 : event.kind == EvidenceKind::TrafficDelay
+                                       ? "sim.traffic"
+                                       : "sim.energy")
+                          : event.source;
         item.kind = event.kind;
         item.subject = event.subject;
         item.observed_at = event.at;
         item.sequence = sequence;
+        item.source_sequence = event.source_sequence == 0
+                                    ? source_sequences[item.source] + 1
+                                    : event.source_sequence;
         item.value = event.value;
-        item.quality = Quality::Valid;
+        item.secondary_value = event.secondary_value;
+        item.quality = event.quality;
+        source_sequences[item.source] = item.source_sequence;
         item.raw_hash = digest(item.source + "|" + item.subject.value + "|" +
                                std::to_string(item.observed_at) + "|" +
+                               std::to_string(item.source_sequence) + "|" +
                                std::to_string(item.value));
+        if (!validate_evidence(candidate_world, item, admitted,
+                               scenario.freshness_window_minutes, error)) {
+            return false;
+        }
 
         Mutation mutation;
         if (event.kind == EvidenceKind::MachineCondition) {
             mutation = Mutation{MutationKind::SetMachineCondition, event.subject, {},
-                                event.value, 50.0 + event.value * 2.0, 0.0,
-                                event.at, item.id};
+                                event.value, event.secondary_value == 0.0
+                                                  ? 50.0 + event.value * 2.0
+                                                  : event.secondary_value,
+                                0.0, event.at, item.id};
         } else if (event.kind == EvidenceKind::TrafficDelay) {
             mutation = Mutation{MutationKind::SetTrafficDelay, {"T-7"}, {},
                                 event.value, 0.0, 0.0, event.at, item.id};
@@ -1054,22 +1159,23 @@ bool run_scenario_events(IndustrialWorld& world,
                                 event.value, 0.0, 0.0, event.at, item.id};
         }
 
-        const auto revision = world.revision();
-        if (!world.commit(revision, {mutation}, error)) {
+        const auto revision = candidate_world.revision();
+        if (!candidate_world.commit(revision, {mutation}, error)) {
             return false;
         }
-        evidence.push_back(std::move(item));
+        admitted.push_back(std::move(item));
     }
 
-    const auto machine_it = world.state().machines.find(ObjectId{"M-12"});
-    if (machine_it != world.state().machines.end()) {
+    std::vector<Finding> derived_findings;
+    const auto machine_it = candidate_world.state().machines.find(ObjectId{"M-12"});
+    if (machine_it != candidate_world.state().machines.end()) {
         std::vector<std::string> supporting;
         double first_value = 0.0;
         SimMinute first_time = 0;
         double latest_value = 0.0;
         SimMinute latest_time = 0;
         bool first = true;
-        for (const auto& item : evidence) {
+        for (const auto& item : admitted) {
             if (item.kind == EvidenceKind::MachineCondition &&
                 item.subject == ObjectId{"M-12"}) {
                 if (first) {
@@ -1087,15 +1193,19 @@ bool run_scenario_events(IndustrialWorld& world,
                                      ? 0.0
                                      : (latest_value - first_value) /
                                            static_cast<double>(latest_time - first_time);
-            findings.push_back(Finding{"F-HEALTH-M12", "degradation_trend",
-                                       {"M-12"}, slope, 0.98, supporting,
-                                       "Vibration is rising; the finding is derived from admitted telemetry."});
-            findings.push_back(Finding{"F-FORECAST-M12", "failure_forecast",
-                                       {"M-12"}, machine_it->second.degradation_index,
-                                       0.91, supporting,
-                                       "Forecast is predicted state, not observed failure truth."});
+            derived_findings.push_back(Finding{"F-HEALTH-M12", "degradation_trend",
+                                               {"M-12"}, slope, 0.98, supporting,
+                                               "Vibration is rising; the finding is derived from admitted telemetry."});
+            derived_findings.push_back(Finding{"F-FORECAST-M12", "failure_forecast",
+                                               {"M-12"}, machine_it->second.degradation_index,
+                                               0.91, supporting,
+                                               "Forecast is predicted state, not observed failure truth."});
         }
     }
+
+    world = std::move(candidate_world);
+    evidence = std::move(admitted);
+    findings = std::move(derived_findings);
     return true;
 }
 
@@ -1107,7 +1217,8 @@ std::string evidence_jsonl(const std::vector<EvidenceItem>& evidence) {
                   quote(to_string(item.kind)) + ",\"subject\":" +
                   object_id(item.subject) + ",\"observed_at\":" +
                   std::to_string(item.observed_at) + ",\"sequence\":" +
-                  std::to_string(item.sequence) + ",\"value\":" +
+                  std::to_string(item.sequence) + ",\"source_sequence\":" +
+                  std::to_string(item.source_sequence) + ",\"value\":" +
                   number(item.value) + ",\"quality\":" +
                   quote(to_string(item.quality)) + ",\"raw_hash\":" +
                   quote(item.raw_hash) + "}\n";

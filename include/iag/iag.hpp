@@ -192,6 +192,7 @@ struct EvidenceItem {
     ObjectId subject;
     SimMinute observed_at{0};
     std::uint64_t sequence{0};
+    std::uint64_t source_sequence{0};
     double value{0.0};
     double secondary_value{0.0};
     Quality quality{Quality::Valid};
@@ -212,6 +213,9 @@ struct ScenarioEvent {
     SimMinute at{0};
     EvidenceKind kind{EvidenceKind::MachineCondition};
     ObjectId subject;
+    std::string source;
+    std::uint64_t source_sequence{0};
+    Quality quality{Quality::Valid};
     double value{0.0};
     double secondary_value{0.0};
 };
@@ -220,6 +224,7 @@ struct ScenarioDefinition {
     std::string name;
     std::uint64_t seed{0};
     std::string world_fixture{"enterprise_v1"};
+    SimMinute freshness_window_minutes{120};
     std::vector<ScenarioEvent> events;
 };
 
@@ -232,6 +237,11 @@ bool run_scenario_events(IndustrialWorld& world,
                          std::vector<EvidenceItem>& evidence,
                          std::vector<Finding>& findings,
                          std::string& error);
+bool validate_evidence(const IndustrialWorld& world,
+                       const EvidenceItem& item,
+                       const std::vector<EvidenceItem>& admitted,
+                       SimMinute freshness_window_minutes,
+                       std::string& error);
 std::string evidence_jsonl(const std::vector<EvidenceItem>& evidence);
 std::string findings_jsonl(const std::vector<Finding>& findings);
 
