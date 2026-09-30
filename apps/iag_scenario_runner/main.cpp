@@ -47,9 +47,18 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    auto world = iag::IndustrialWorld::synthetic_enterprise();
+    const auto fixture_path = scenario_path.parent_path().parent_path() /
+                              "fixtures" /
+                              (scenario.world_fixture + ".yaml");
+    auto world = iag::IndustrialWorld::load_fixture_file(
+        fixture_path.string(), error);
+    if (!error.empty()) {
+        std::cerr << error << '\n';
+        return 1;
+    }
     const auto before = world;
-    if (!write_file(output_dir / "world_before.json", before.to_json())) {
+    if (!write_file(output_dir / "world_before.json", before.to_json()) ||
+        !write_file(output_dir / "world_before.snapshot", before.snapshot_text())) {
         std::cerr << "unable to write world_before.json\n";
         return 1;
     }
@@ -103,7 +112,19 @@ int main(int argc, char** argv) {
 
     iag::SimulatedExecutionAdapter adapter;
     const auto execution = adapter.dispatch(world, decision, request);
-    const auto idempotent_replay = adapter.dispatch(world, decision, request);
+    if (!adapter.save_receipts((output_dir / "execution_receipts.store").string(),
+                               error)) {
+        std::cerr << error << '\n';
+        return 1;
+    }
+    iag::SimulatedExecutionAdapter restarted_adapter;
+    if (!restarted_adapter.load_receipts(
+            (output_dir / "execution_receipts.store").string(), error)) {
+        std::cerr << error << '\n';
+        return 1;
+    }
+    const auto idempotent_replay =
+        restarted_adapter.dispatch(world, decision, request);
     if (execution.dispatched && idempotent_replay.status != "IDEMPOTENT_REPLAY") {
         std::cerr << "idempotency check failed\n";
         return 1;
@@ -116,6 +137,7 @@ int main(int argc, char** argv) {
 
     const auto after = world;
     if (!write_file(output_dir / "world_after.json", after.to_json()) ||
+        !write_file(output_dir / "world_after.snapshot", after.snapshot_text()) ||
         !write_file(output_dir / "replay_manifest.json",
                     iag::replay_manifest_json(
                         before, after, scenario, evidence, findings, planning,
@@ -138,4 +160,3 @@ int main(int argc, char** argv) {
               << "artifacts=" << output_dir.string() << '\n';
     return execution.verified ? 0 : 1;
 }
-

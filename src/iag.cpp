@@ -11,6 +11,16 @@ namespace iag {
 
 namespace {
 
+std::string trim(std::string value);
+std::string after_colon(const std::string& line);
+std::vector<std::string> split_pipe(const std::string& value);
+bool parse_integer(const std::string& value, std::int64_t& result);
+bool parse_revision(const std::string& value, Revision& result);
+double parse_number(const std::string& value, bool& ok);
+bool parse_world_record(IndustrialState& state,
+                        const std::string& line,
+                        std::string& error);
+
 std::string quote(std::string_view text) {
     std::string result{"\""};
     for (const char ch : text) {
@@ -201,6 +211,95 @@ IndustrialWorld IndustrialWorld::synthetic_enterprise() {
     state.commitments.emplace(
         ObjectId{"CUST-01"},
         CustomerCommitment{{"CUST-01"}, {"WO-1048"}, 1320, true});
+    return world;
+}
+
+IndustrialWorld IndustrialWorld::load_fixture_file(std::string_view path,
+                                                   std::string& error) {
+    IndustrialWorld world;
+    std::ifstream input{std::string(path)};
+    if (!input) {
+        error = "FIXTURE_NOT_FOUND:" + std::string(path);
+        return world;
+    }
+
+    bool header_seen = false;
+    std::string line;
+    while (std::getline(input, line)) {
+        line = trim(line);
+        if (line.empty() || line.front() == '#') continue;
+        if (line.rfind("fixture:", 0) == 0) {
+            if (after_colon(line) != "enterprise_v1") {
+                error = "UNSUPPORTED_FIXTURE:" + after_colon(line);
+                return {};
+            }
+            header_seen = true;
+            continue;
+        }
+        if (!parse_world_record(world.state_, line, error)) return {};
+    }
+    if (!header_seen || world.state_.sites.empty() || world.state_.machines.empty()) {
+        error = "INVALID_ENTERPRISE_FIXTURE";
+        return {};
+    }
+    return world;
+}
+
+IndustrialWorld IndustrialWorld::load_snapshot_file(std::string_view path,
+                                                    std::string& error) {
+    IndustrialWorld world;
+    std::ifstream input{std::string(path)};
+    if (!input) {
+        error = "SNAPSHOT_NOT_FOUND:" + std::string(path);
+        return world;
+    }
+
+    bool header_seen = false;
+    bool revision_seen = false;
+    std::string line;
+    while (std::getline(input, line)) {
+        line = trim(line);
+        if (line.empty() || line.front() == '#') continue;
+        if (line.rfind("snapshot:", 0) == 0) {
+            if (after_colon(line) != "1") {
+                error = "UNSUPPORTED_SNAPSHOT_VERSION";
+                return {};
+            }
+            header_seen = true;
+        } else if (line.rfind("revision:", 0) == 0) {
+            if (!parse_revision(after_colon(line), world.revision_)) {
+                error = "INVALID_SNAPSHOT_REVISION";
+                return {};
+            }
+            revision_seen = true;
+        } else if (line.rfind("now_minute:", 0) == 0) {
+            std::int64_t now = 0;
+            if (!parse_integer(after_colon(line), now)) {
+                error = "INVALID_SNAPSHOT_TIME";
+                return {};
+            }
+            world.state_.now = now;
+        } else if (line.rfind("event|", 0) == 0) {
+            const auto parts = split_pipe(line);
+            if (parts.size() < 5) {
+                error = "INVALID_SNAPSHOT_EVENT";
+                return {};
+            }
+            Revision revision = 0;
+            if (!parse_revision(parts[1], revision)) {
+                error = "INVALID_SNAPSHOT_EVENT_REVISION";
+                return {};
+            }
+            world.journal_.push_back(
+                WorldEvent{revision, parts[2], {parts[3]}, parts[4]});
+        } else if (!parse_world_record(world.state_, line, error)) {
+            return {};
+        }
+    }
+    if (!header_seen || !revision_seen || world.state_.sites.empty()) {
+        error = "INVALID_WORLD_SNAPSHOT";
+        return {};
+    }
     return world;
 }
 
@@ -407,6 +506,79 @@ std::string IndustrialWorld::to_json() const {
     return result;
 }
 
+std::string IndustrialWorld::snapshot_text() const {
+    std::string result;
+    result += "snapshot: 1\n";
+    result += "revision: " + std::to_string(revision_) + "\n";
+    result += "now_minute: " + std::to_string(state_.now) + "\n";
+    for (const auto& [id, site] : state_.sites) {
+        result += "site|" + id.value + "|" + site.name + "\n";
+    }
+    for (const auto& [id, line] : state_.lines) {
+        result += "line|" + id.value + "|" + line.site.value + "|" + line.name +
+                  "|" + number(line.units_per_hour) + "|" +
+                  (line.available ? "1" : "0") + "\n";
+    }
+    for (const auto& [id, machine] : state_.machines) {
+        result += "machine|" + id.value + "|" + machine.site.value + "|" +
+                  machine.line.value + "|" + to_string(machine.state) + "|" +
+                  number(machine.vibration_rms) + "|" +
+                  number(machine.temperature_c) + "|" +
+                  number(machine.degradation_index) + "\n";
+    }
+    for (const auto& [id, product] : state_.products) {
+        result += "product|" + id.value + "|" + product.sku + "|" +
+                  product.primary_line.value + "|" + product.alternate_line.value + "\n";
+    }
+    for (const auto& [id, order] : state_.work_orders) {
+        result += "work_order|" + id.value + "|" + order.product.value + "|" +
+                  number(order.quantity_required) + "|" +
+                  number(order.quantity_complete) + "|" +
+                  number(order.scheduled_quantity) + "|" +
+                  std::to_string(order.due_minute) + "|" +
+                  to_string(order.state) + "|" + order.assigned_line.value + "\n";
+    }
+    for (const auto& [id, item] : state_.inventory) {
+        result += "inventory|" + id.value + "|" + item.item.value + "|" +
+                  item.location.value + "|" + number(item.on_hand) + "|" +
+                  number(item.reserved) + "|" + number(item.quarantine) + "\n";
+    }
+    for (const auto& [id, warehouse] : state_.warehouses) {
+        result += "warehouse|" + id.value + "|" + warehouse.site.value + "|" +
+                  number(warehouse.capacity_units) + "\n";
+    }
+    for (const auto& [id, task] : state_.maintenance) {
+        result += "maintenance|" + id.value + "|" + task.machine.value + "|" +
+                  task.technician.value + "|" + to_string(task.state) + "|" +
+                  std::to_string(task.window_start) + "|" +
+                  std::to_string(task.window_end) + "\n";
+    }
+    for (const auto& [id, technician] : state_.technicians) {
+        result += "technician|" + id.value + "|" + technician.site.value + "|" +
+                  (technician.qualified ? "1" : "0") + "|" +
+                  std::to_string(technician.available_from) + "|" +
+                  std::to_string(technician.available_until) + "\n";
+    }
+    for (const auto& [id, vehicle] : state_.vehicles) {
+        result += "vehicle|" + id.value + "|" + vehicle.route.value + "|" +
+                  std::to_string(vehicle.delay_minutes) + "\n";
+    }
+    for (const auto& [id, tariff] : state_.tariffs) {
+        result += "tariff|" + id.value + "|" + number(tariff.multiplier) + "|" +
+                  std::to_string(tariff.peak_start) + "\n";
+    }
+    for (const auto& [id, commitment] : state_.commitments) {
+        result += "commitment|" + id.value + "|" + commitment.work_order.value + "|" +
+                  std::to_string(commitment.due_minute) + "|" +
+                  (commitment.hard_protected ? "1" : "0") + "\n";
+    }
+    for (const auto& event : journal_) {
+        result += "event|" + std::to_string(event.revision) + "|" + event.kind +
+                  "|" + event.subject.value + "|" + event.detail + "\n";
+    }
+    return result;
+}
+
 std::string IndustrialWorld::events_json() const {
     std::string result;
     for (const auto& event : journal_) {
@@ -439,6 +611,265 @@ std::string trim(std::string value) {
         value.pop_back();
     }
     return value;
+}
+
+std::vector<std::string> split_pipe(const std::string& value) {
+    std::vector<std::string> parts;
+    std::size_t start = 0;
+    while (start <= value.size()) {
+        const auto end = value.find('|', start);
+        parts.push_back(trim(value.substr(
+            start, end == std::string::npos ? std::string::npos : end - start)));
+        if (end == std::string::npos) break;
+        start = end + 1;
+    }
+    return parts;
+}
+
+bool parse_bool(const std::string& value, bool& ok) {
+    if (value == "1" || value == "true") {
+        ok = true;
+        return true;
+    }
+    if (value == "0" || value == "false") {
+        ok = true;
+        return false;
+    }
+    ok = false;
+    return false;
+}
+
+bool parse_integer(const std::string& value, std::int64_t& result) {
+    try {
+        std::size_t used = 0;
+        result = std::stoll(value, &used);
+        return used == value.size();
+    } catch (...) {
+        result = 0;
+        return false;
+    }
+}
+
+bool parse_revision(const std::string& value, Revision& result) {
+    try {
+        std::size_t used = 0;
+        result = static_cast<Revision>(std::stoull(value, &used));
+        return used == value.size();
+    } catch (...) {
+        result = 0;
+        return false;
+    }
+}
+
+MachineState parse_machine_state(const std::string& value, bool& ok) {
+    if (value == "operational") { ok = true; return MachineState::Operational; }
+    if (value == "degraded") { ok = true; return MachineState::Degraded; }
+    if (value == "failed") { ok = true; return MachineState::Failed; }
+    if (value == "maintenance") { ok = true; return MachineState::Maintenance; }
+    if (value == "offline") { ok = true; return MachineState::Offline; }
+    ok = false;
+    return MachineState::Offline;
+}
+
+WorkOrderState parse_work_order_state(const std::string& value, bool& ok) {
+    if (value == "scheduled") { ok = true; return WorkOrderState::Scheduled; }
+    if (value == "in_progress") { ok = true; return WorkOrderState::InProgress; }
+    if (value == "complete") { ok = true; return WorkOrderState::Complete; }
+    if (value == "blocked") { ok = true; return WorkOrderState::Blocked; }
+    ok = false;
+    return WorkOrderState::Blocked;
+}
+
+MaintenanceState parse_maintenance_state(const std::string& value, bool& ok) {
+    if (value == "planned") { ok = true; return MaintenanceState::Planned; }
+    if (value == "assigned") { ok = true; return MaintenanceState::Assigned; }
+    if (value == "in_progress") { ok = true; return MaintenanceState::InProgress; }
+    if (value == "complete") { ok = true; return MaintenanceState::Complete; }
+    ok = false;
+    return MaintenanceState::Planned;
+}
+
+bool parse_world_record(IndustrialState& state,
+                        const std::string& line,
+                        std::string& error) {
+    const auto parts = split_pipe(line);
+    if (parts.empty()) return true;
+    const auto& kind = parts.front();
+    auto require = [&](std::size_t count) {
+        if (parts.size() < count) {
+            error = "INVALID_FIXTURE_RECORD:" + kind;
+            return false;
+        }
+        return true;
+    };
+
+    if (kind == "site") {
+        if (!require(3)) return false;
+        state.sites[ObjectId{parts[1]}] = Site{{parts[1]}, parts[2]};
+        return true;
+    }
+    if (kind == "line") {
+        if (!require(6)) return false;
+        bool ok = false;
+        const auto rate = parse_number(parts[4], ok);
+        if (!ok) { error = "INVALID_LINE_RATE:" + parts[1]; return false; }
+        bool available_ok = false;
+        const auto available = parse_bool(parts[5], available_ok);
+        if (!available_ok) { error = "INVALID_LINE_AVAILABILITY:" + parts[1]; return false; }
+        state.lines[ObjectId{parts[1]}] =
+            ProductionLine{{parts[1]}, {parts[2]}, parts[3], rate, available};
+        return true;
+    }
+    if (kind == "machine") {
+        if (!require(8)) return false;
+        bool state_ok = false;
+        const auto machine_state = parse_machine_state(parts[4], state_ok);
+        bool vibration_ok = false;
+        bool temperature_ok = false;
+        bool degradation_ok = false;
+        const auto vibration = parse_number(parts[5], vibration_ok);
+        const auto temperature = parse_number(parts[6], temperature_ok);
+        const auto degradation = parse_number(parts[7], degradation_ok);
+        if (!state_ok || !vibration_ok || !temperature_ok || !degradation_ok) {
+            error = "INVALID_MACHINE_RECORD:" + parts[1];
+            return false;
+        }
+        state.machines[ObjectId{parts[1]}] =
+            Machine{{parts[1]}, {parts[2]}, {parts[3]}, machine_state,
+                    vibration, temperature, degradation};
+        return true;
+    }
+    if (kind == "product") {
+        if (!require(5)) return false;
+        state.products[ObjectId{parts[1]}] =
+            Product{{parts[1]}, parts[2], {parts[3]}, {parts[4]}};
+        return true;
+    }
+    if (kind == "work_order") {
+        if (!require(9)) return false;
+        bool required_ok = false;
+        bool complete_ok = false;
+        bool scheduled_ok = false;
+        bool due_ok = false;
+        const auto required = parse_number(parts[3], required_ok);
+        const auto complete = parse_number(parts[4], complete_ok);
+        const auto scheduled = parse_number(parts[5], scheduled_ok);
+        std::int64_t due = 0;
+        due_ok = parse_integer(parts[6], due);
+        bool state_ok = false;
+        const auto order_state = parse_work_order_state(parts[7], state_ok);
+        if (!required_ok || !complete_ok || !scheduled_ok || !due_ok || !state_ok) {
+            error = "INVALID_WORK_ORDER_RECORD:" + parts[1];
+            return false;
+        }
+        state.work_orders[ObjectId{parts[1]}] =
+            WorkOrder{{parts[1]}, {parts[2]}, required, complete, scheduled,
+                      due, order_state, {parts[8]}};
+        return true;
+    }
+    if (kind == "inventory") {
+        if (!require(7)) return false;
+        bool on_hand_ok = false;
+        bool reserved_ok = false;
+        bool quarantine_ok = false;
+        const auto on_hand = parse_number(parts[4], on_hand_ok);
+        const auto reserved = parse_number(parts[5], reserved_ok);
+        const auto quarantine = parse_number(parts[6], quarantine_ok);
+        if (!on_hand_ok || !reserved_ok || !quarantine_ok) {
+            error = "INVALID_INVENTORY_RECORD:" + parts[1];
+            return false;
+        }
+        state.inventory[ObjectId{parts[1]}] =
+            InventoryPosition{{parts[1]}, {parts[2]}, {parts[3]}, on_hand,
+                               reserved, quarantine};
+        return true;
+    }
+    if (kind == "warehouse") {
+        if (!require(4)) return false;
+        bool capacity_ok = false;
+        const auto capacity = parse_number(parts[3], capacity_ok);
+        if (!capacity_ok) { error = "INVALID_WAREHOUSE_RECORD:" + parts[1]; return false; }
+        state.warehouses[ObjectId{parts[1]}] =
+            Warehouse{{parts[1]}, {parts[2]}, capacity};
+        return true;
+    }
+    if (kind == "maintenance") {
+        if (!require(7)) return false;
+        std::int64_t start = 0;
+        std::int64_t end = 0;
+        bool start_ok = parse_integer(parts[5], start);
+        bool end_ok = parse_integer(parts[6], end);
+        bool state_ok = false;
+        const auto maintenance_state = parse_maintenance_state(parts[4], state_ok);
+        if (!start_ok || !end_ok || !state_ok) {
+            error = "INVALID_MAINTENANCE_RECORD:" + parts[1];
+            return false;
+        }
+        state.maintenance[ObjectId{parts[1]}] =
+            MaintenanceTask{{parts[1]}, {parts[2]}, {parts[3]}, maintenance_state,
+                             start, end};
+        return true;
+    }
+    if (kind == "technician") {
+        if (!require(6)) return false;
+        bool qualified_ok = false;
+        const auto qualified = parse_bool(parts[3], qualified_ok);
+        std::int64_t from = 0;
+        std::int64_t until = 0;
+        const auto from_ok = parse_integer(parts[4], from);
+        const auto until_ok = parse_integer(parts[5], until);
+        if (!qualified_ok || !from_ok || !until_ok) {
+            error = "INVALID_TECHNICIAN_RECORD:" + parts[1];
+            return false;
+        }
+        state.technicians[ObjectId{parts[1]}] =
+            Technician{{parts[1]}, {parts[2]}, qualified, from, until};
+        return true;
+    }
+    if (kind == "vehicle") {
+        if (!require(4)) return false;
+        std::int64_t delay = 0;
+        if (!parse_integer(parts[3], delay)) {
+            error = "INVALID_VEHICLE_RECORD:" + parts[1];
+            return false;
+        }
+        state.vehicles[ObjectId{parts[1]}] =
+            Vehicle{{parts[1]}, {parts[2]}, delay};
+        return true;
+    }
+    if (kind == "tariff") {
+        if (!require(4)) return false;
+        bool multiplier_ok = false;
+        const auto multiplier = parse_number(parts[2], multiplier_ok);
+        std::int64_t peak = 0;
+        const auto peak_ok = parse_integer(parts[3], peak);
+        if (!multiplier_ok || !peak_ok) {
+            error = "INVALID_TARIFF_RECORD:" + parts[1];
+            return false;
+        }
+        state.tariffs[ObjectId{parts[1]}] =
+            EnergyTariff{{parts[1]}, multiplier, peak};
+        return true;
+    }
+    if (kind == "commitment") {
+        if (!require(5)) return false;
+        std::int64_t due = 0;
+        if (!parse_integer(parts[3], due)) {
+            error = "INVALID_COMMITMENT_RECORD:" + parts[1];
+            return false;
+        }
+        bool protected_ok = false;
+        const auto protected_commitment = parse_bool(parts[4], protected_ok);
+        if (!protected_ok) {
+            error = "INVALID_COMMITMENT_RECORD:" + parts[1];
+            return false;
+        }
+        state.commitments[ObjectId{parts[1]}] =
+            CustomerCommitment{{parts[1]}, {parts[2]}, due, protected_commitment};
+        return true;
+    }
+    error = "UNKNOWN_FIXTURE_RECORD:" + kind;
+    return false;
 }
 
 std::string after_colon(const std::string& line) {
@@ -511,6 +942,8 @@ ScenarioDefinition load_scenario_file(std::string_view path, std::string& error)
                 error = "INVALID_SCENARIO_SEED";
                 return {};
             }
+        } else if (line.rfind("world_fixture:", 0) == 0) {
+            scenario.world_fixture = after_colon(line);
         } else if (line.rfind("- at:", 0) == 0) {
             flush();
             pending = ScenarioEvent{};

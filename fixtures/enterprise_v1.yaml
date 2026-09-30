@@ -1,0 +1,19 @@
+# CHAINSIGHT enterprise fixture format v1.
+# Records are pipe-delimited: kind|id|... . Values are intentionally simple
+# and deterministic so a clean checkout can load and reproduce this world.
+fixture: enterprise_v1
+
+site|SITE-01|Canopy Plant 01
+line|LINE-A|SITE-01|Line A|120.000|1
+line|LINE-B|SITE-01|Line B|105.000|1
+machine|M-12|SITE-01|LINE-A|operational|4.200|52.000|0.200
+machine|M-13|SITE-01|LINE-B|operational|2.100|48.000|0.080
+product|SKU-100|SKU-100|LINE-A|LINE-B
+product|SKU-200|SKU-200|LINE-A|LINE-B
+work_order|WO-1048|SKU-100|280.000|120.000|160.000|1320|in_progress|LINE-A
+inventory|INV-BRG-17|BRG-17|WH-02|1.000|0.000|0.000
+warehouse|WH-02|SITE-01|10000.000
+technician|T-4|SITE-01|1|300|540
+vehicle|T-7|R-7|0
+tariff|SITE-01|1.000|420
+commitment|CUST-01|WO-1048|1320|1

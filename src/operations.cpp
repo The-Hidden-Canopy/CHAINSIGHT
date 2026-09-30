@@ -1,6 +1,7 @@
 #include "iag/operations.hpp"
 
 #include <algorithm>
+#include <fstream>
 #include <iomanip>
 #include <sstream>
 
@@ -81,6 +82,42 @@ std::string simulation_json(const SimulationResult& simulation) {
            number(simulation.labor_utilization) +
            ",\"consequence_summary\":" +
            quote(simulation.consequence_summary) + "}";
+}
+
+std::vector<std::string> split_pipe(std::string_view value) {
+    std::vector<std::string> parts;
+    std::size_t start = 0;
+    while (start <= value.size()) {
+        const auto end = value.find('|', start);
+        parts.emplace_back(value.substr(
+            start, end == std::string_view::npos ? std::string_view::npos : end - start));
+        if (end == std::string_view::npos) break;
+        start = end + 1;
+    }
+    return parts;
+}
+
+bool parse_bool(std::string_view value, bool& result) {
+    if (value == "1") {
+        result = true;
+        return true;
+    }
+    if (value == "0") {
+        result = false;
+        return true;
+    }
+    return false;
+}
+
+bool parse_unsigned(std::string_view value, std::uint64_t& result) {
+    try {
+        std::size_t used = 0;
+        result = std::stoull(std::string(value), &used);
+        return used == value.size();
+    } catch (...) {
+        result = 0;
+        return false;
+    }
 }
 
 }  // namespace
@@ -299,6 +336,7 @@ ExecutionResult SimulatedExecutionAdapter::dispatch(
         return result;
     }
 
+    ++external_call_count_;
     const Mutation mutation{MutationKind::AssignWorkOrderLine, request.subject,
                             request.destination, 0.0, 0.0, request.quantity, 0,
                             request.id};
@@ -315,6 +353,10 @@ ExecutionResult SimulatedExecutionAdapter::dispatch(
     const auto& order = world.state().work_orders.at(request.subject);
     result.verified = order.assigned_line == request.destination &&
                       order.scheduled_quantity == request.quantity;
+    if (verification_override_enabled_) {
+        result.verified = verification_override_;
+    }
+    result.replan_required = result.dispatched && !result.verified;
     result.status = result.verified ? "VERIFIED" : "VERIFY_MISMATCH";
     result.detail = result.verified
                         ? "SimMES observed the requested bounded assignment."
@@ -323,10 +365,88 @@ ExecutionResult SimulatedExecutionAdapter::dispatch(
     return result;
 }
 
+std::string SimulatedExecutionAdapter::receipts_text() const {
+    std::string result{"receipt_store: 1\n"};
+    for (const auto& [key, receipt] : receipts_) {
+        result += "receipt|" + key + "|" + (receipt.dispatched ? "1" : "0") +
+                  "|" + (receipt.verified ? "1" : "0") + "|" +
+                  (receipt.replan_required ? "1" : "0") + "|" +
+                  std::to_string(receipt.before_revision) + "|" +
+                  std::to_string(receipt.after_revision) + "|" + receipt.status +
+                  "|" + receipt.detail + "\n";
+    }
+    return result;
+}
+
+bool SimulatedExecutionAdapter::save_receipts(std::string_view path,
+                                              std::string& error) const {
+    std::ofstream output{std::string(path), std::ios::binary};
+    if (!output) {
+        error = "RECEIPT_STORE_NOT_WRITABLE:" + std::string(path);
+        return false;
+    }
+    output << receipts_text();
+    if (!output) {
+        error = "RECEIPT_STORE_WRITE_FAILED:" + std::string(path);
+        return false;
+    }
+    return true;
+}
+
+bool SimulatedExecutionAdapter::load_receipts(std::string_view path,
+                                              std::string& error) {
+    std::ifstream input{std::string(path), std::ios::binary};
+    if (!input) {
+        error = "RECEIPT_STORE_NOT_FOUND:" + std::string(path);
+        return false;
+    }
+    receipts_.clear();
+    std::string line;
+    bool header_seen = false;
+    while (std::getline(input, line)) {
+        if (line.empty()) continue;
+        if (line == "receipt_store: 1") {
+            header_seen = true;
+            continue;
+        }
+        const auto parts = split_pipe(line);
+        if (parts.size() < 9 || parts[0] != "receipt") {
+            error = "INVALID_RECEIPT_STORE_RECORD";
+            return false;
+        }
+        bool dispatched = false;
+        bool verified = false;
+        bool replan_required = false;
+        if (!parse_bool(parts[2], dispatched) ||
+            !parse_bool(parts[3], verified) ||
+            !parse_bool(parts[4], replan_required)) {
+            error = "INVALID_RECEIPT_STORE_FLAGS";
+            return false;
+        }
+        std::uint64_t before_revision = 0;
+        std::uint64_t after_revision = 0;
+        if (!parse_unsigned(parts[5], before_revision) ||
+            !parse_unsigned(parts[6], after_revision)) {
+            error = "INVALID_RECEIPT_STORE_REVISION";
+            return false;
+        }
+        receipts_[parts[1]] = ExecutionResult{
+            parts[1], dispatched, verified, replan_required, before_revision,
+            after_revision, parts[7], parts[8]};
+    }
+    if (!header_seen) {
+        error = "INVALID_RECEIPT_STORE_HEADER";
+        return false;
+    }
+    return true;
+}
+
 std::string execution_json(const ExecutionResult& result) {
     return "{\n  \"idempotency_key\":" + quote(result.idempotency_key) +
            ",\n  \"dispatched\":" + (result.dispatched ? "true" : "false") +
            ",\n  \"verified\":" + (result.verified ? "true" : "false") +
+           ",\n  \"replan_required\":" +
+           (result.replan_required ? "true" : "false") +
            ",\n  \"before_revision\":" + std::to_string(result.before_revision) +
            ",\n  \"after_revision\":" + std::to_string(result.after_revision) +
            ",\n  \"status\":" + quote(result.status) +

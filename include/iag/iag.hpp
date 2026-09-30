@@ -219,6 +219,7 @@ struct ScenarioEvent {
 struct ScenarioDefinition {
     std::string name;
     std::uint64_t seed{0};
+    std::string world_fixture{"enterprise_v1"};
     std::vector<ScenarioEvent> events;
 };
 
@@ -237,6 +238,10 @@ std::string findings_jsonl(const std::vector<Finding>& findings);
 class IndustrialWorld {
 public:
     static IndustrialWorld synthetic_enterprise();
+    static IndustrialWorld load_fixture_file(std::string_view path,
+                                             std::string& error);
+    static IndustrialWorld load_snapshot_file(std::string_view path,
+                                              std::string& error);
 
     Revision revision() const noexcept { return revision_; }
     const IndustrialState& state() const noexcept { return state_; }
@@ -244,6 +249,7 @@ public:
 
     std::string state_digest() const;
     std::string to_json() const;
+    std::string snapshot_text() const;
     std::string events_json() const;
 
     bool commit(Revision expected_revision,

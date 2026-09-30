@@ -3,6 +3,7 @@
 
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 
 namespace {
@@ -22,6 +23,15 @@ int main() {
           "digest is deterministic");
 
     auto world = iag::IndustrialWorld::synthetic_enterprise();
+    const auto fixture_path =
+        std::filesystem::path(__FILE__).parent_path().parent_path() /
+        "fixtures" / "enterprise_v1.yaml";
+    std::string fixture_error;
+    const auto fixture_world =
+        iag::IndustrialWorld::load_fixture_file(fixture_path.string(), fixture_error);
+    check(fixture_error.empty(), "documented enterprise fixture loads");
+    check(fixture_world.state_digest() == world.state_digest(),
+          "fixture reproduces the built-in enterprise digest");
     check(world.revision() == 0, "synthetic world starts at revision zero");
     const auto before = world.state_digest();
     std::string error;
@@ -45,6 +55,24 @@ int main() {
     check(error.find("STALE_REVISION") == 0, "stale revision has explicit error");
     check(world.events().size() == 1, "journal records committed event");
 
+    const auto snapshot_path =
+        std::filesystem::temp_directory_path() / "chainsight-world.snapshot";
+    {
+        std::ofstream snapshot(snapshot_path, std::ios::binary);
+        snapshot << world.snapshot_text();
+    }
+    std::string snapshot_error;
+    const auto restored =
+        iag::IndustrialWorld::load_snapshot_file(snapshot_path.string(), snapshot_error);
+    check(snapshot_error.empty(), "world snapshot reloads");
+    check(restored.revision() == world.revision(),
+          "snapshot restores world revision");
+    check(restored.state_digest() == world.state_digest(),
+          "snapshot restores exact state digest");
+    check(restored.events().size() == world.events().size(),
+          "snapshot restores committed journal");
+    std::filesystem::remove(snapshot_path);
+
     std::string scenario_error;
     const auto scenario_path =
         std::filesystem::path(__FILE__).parent_path().parent_path() /
@@ -58,7 +86,7 @@ int main() {
     check(scenario.events.size() == 4, "scenario has four deterministic events");
     check(scenario.events.at(1).at == 30, "scenario time is parsed");
 
-    auto scenario_world = iag::IndustrialWorld::synthetic_enterprise();
+    auto scenario_world = fixture_world;
     std::vector<iag::EvidenceItem> evidence;
     std::vector<iag::Finding> findings;
     check(iag::run_scenario_events(scenario_world, scenario, evidence, findings,
@@ -105,6 +133,20 @@ int main() {
     const auto replay = adapter.dispatch(scenario_world, decision, request);
     check(replay.status == "IDEMPOTENT_REPLAY",
           "repeated action is idempotent");
+
+    const auto receipt_path =
+        std::filesystem::temp_directory_path() / "chainsight-receipts.store";
+    std::string receipt_error;
+    check(adapter.save_receipts(receipt_path.string(), receipt_error),
+          "execution receipts persist");
+    iag::SimulatedExecutionAdapter restarted_adapter;
+    check(restarted_adapter.load_receipts(receipt_path.string(), receipt_error),
+          "execution receipts reload");
+    const auto restarted_replay =
+        restarted_adapter.dispatch(scenario_world, decision, request);
+    check(restarted_replay.status == "IDEMPOTENT_REPLAY",
+          "restart does not duplicate external action");
+    std::filesystem::remove(receipt_path);
 
     const auto denied_decision =
         iag::govern(scenario_world, planning.candidates.at(3), request);

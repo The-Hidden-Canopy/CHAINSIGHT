@@ -14,6 +14,12 @@ ownership, authorship, visibility, credentials, or delivery authority.
 
 ## v0.1 vertical slice
 
+The enterprise fixture is a documented pipe-delimited format in
+`fixtures/enterprise_v1.yaml`. World snapshots use the same records with a
+`snapshot: 1` header, revision, simulation time, and committed event records.
+The fixture and snapshot loaders reject unknown records rather than silently
+dropping state.
+
 The first complete slice proves the required chain:
 
 1. load a synthetic enterprise;
@@ -37,4 +43,3 @@ logic, production deployment, live industrial integrations, customer outcomes,
 regulatory approval, or hardware parity. Real adapters and physical
 integration are later phases and remain fail-closed until separately
 validated.
-

@@ -4,6 +4,7 @@
 
 #include <map>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace iag {
@@ -88,6 +89,7 @@ struct ExecutionResult {
     std::string idempotency_key;
     bool dispatched{false};
     bool verified{false};
+    bool replan_required{false};
     Revision before_revision{0};
     Revision after_revision{0};
     std::string status;
@@ -100,8 +102,23 @@ public:
                              const GovernanceDecision& decision,
                              const ActionRequest& request);
 
+    std::string receipts_text() const;
+    bool save_receipts(std::string_view path, std::string& error) const;
+    bool load_receipts(std::string_view path, std::string& error);
+    std::size_t external_call_count() const noexcept {
+        return external_call_count_;
+    }
+
+    void set_verification_override(bool verified) noexcept {
+        verification_override_enabled_ = true;
+        verification_override_ = verified;
+    }
+
 private:
     std::map<std::string, ExecutionResult> receipts_;
+    std::size_t external_call_count_{0};
+    bool verification_override_enabled_{false};
+    bool verification_override_{true};
 };
 
 std::string execution_json(const ExecutionResult& result);
@@ -123,4 +140,3 @@ std::string report_markdown(const IndustrialWorld& before,
                             const ExecutionResult& execution);
 
 }  // namespace iag
-
