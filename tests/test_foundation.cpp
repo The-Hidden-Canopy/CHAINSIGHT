@@ -191,11 +191,12 @@ int main() {
         iag::govern(scenario_world, planning.candidates.at(3), request);
     check(denied_decision.action == iag::GovernanceAction::Deny,
           "denied candidate cannot be governed");
+    iag::SimulatedExecutionAdapter denied_adapter;
     const auto denied_execution =
-        adapter.dispatch(scenario_world, denied_decision, request);
+        denied_adapter.dispatch(scenario_world, denied_decision, request);
     check(denied_execution.status == "BLOCKED_BY_GOVERNANCE",
           "denied action is blocked before adapter execution");
-    check(adapter.external_call_count() == 1,
+    check(denied_adapter.external_call_count() == 0,
           "denied action does not reach the external adapter");
 
     auto mismatch_world = fixture_world;
