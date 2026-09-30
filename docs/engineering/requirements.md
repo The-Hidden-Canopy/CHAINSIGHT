@@ -36,6 +36,12 @@ The first complete slice proves the required chain:
 11. update the authoritative world revision;
 12. emit replayable artifacts and a reconstruction report.
 
+Acceptance-closure requirements add two stronger checks: scenario admission is
+atomic when evidence fails quality, sequence, freshness, or contradiction
+checks, and the runner executes the same seeded scenario twice and compares
+the full deterministic artifact set rather than merely recording a replay
+digest.
+
 ## Non-claims
 
 This repository does not claim physical machine control, certified safety

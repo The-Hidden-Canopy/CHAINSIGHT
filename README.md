@@ -44,7 +44,10 @@ build\Debug\iag_scenario_runner.exe scenarios\bearing_failure_compound.yaml
 ~~~
 
 The runner writes a replayable evidence, planning, governance, execution, and
-world-transition artifact set under artifacts\bearing_failure_compound.
+world-transition artifact set under artifacts\bearing_failure_compound. It
+also runs the scenario a second time and writes replay_verification.json only
+when every deterministic artifact matches. Use --no-replay-check only when
+debugging a single run.
 
 ## Engineering boundaries
 
@@ -53,6 +56,9 @@ world-transition artifact set under artifacts\bearing_failure_compound.
 - Plans are simulated on snapshots and execution commits one bounded step.
 - Hard constraints are explicit and cannot be traded away by scoring.
 - External writes are represented by idempotent simulated adapters in v0.1.
+- Evidence admission rejects invalid quality, stale, replayed, contradictory,
+  and hash-mismatched records before world mutation.
+- World snapshots and simulated receipt stores can be reloaded after restart.
 - Hardware, physical actuation, cloud collection, and production deployment
   remain later, explicitly gated work.
 

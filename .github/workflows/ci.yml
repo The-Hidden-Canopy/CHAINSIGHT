@@ -25,15 +25,19 @@ jobs:
         run: |
           $required = @(
             "world_before.json",
+            "world_before.snapshot",
             "evidence.jsonl",
             "findings.jsonl",
             "candidates.json",
             "simulation_results.json",
             "decision.json",
             "execution_receipt.json",
+            "execution_receipts.store",
             "world_after.json",
+            "world_after.snapshot",
             "replay_manifest.json",
-            "report.md"
+            "report.md",
+            "replay_verification.json"
           )
           foreach ($name in $required) {
             if (-not (Test-Path "artifacts\ci\$name")) {
