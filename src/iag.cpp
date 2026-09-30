@@ -43,6 +43,12 @@ std::string number(double value) {
     return output.str();
 }
 
+std::string precise_number(double value) {
+    std::ostringstream output;
+    output << std::setprecision(17) << value;
+    return output.str();
+}
+
 std::string object_id(const ObjectId& id) {
     return quote(id.value);
 }
@@ -516,15 +522,15 @@ std::string IndustrialWorld::snapshot_text() const {
     }
     for (const auto& [id, line] : state_.lines) {
         result += "line|" + id.value + "|" + line.site.value + "|" + line.name +
-                  "|" + number(line.units_per_hour) + "|" +
+                  "|" + precise_number(line.units_per_hour) + "|" +
                   (line.available ? "1" : "0") + "\n";
     }
     for (const auto& [id, machine] : state_.machines) {
         result += "machine|" + id.value + "|" + machine.site.value + "|" +
                   machine.line.value + "|" + to_string(machine.state) + "|" +
-                  number(machine.vibration_rms) + "|" +
-                  number(machine.temperature_c) + "|" +
-                  number(machine.degradation_index) + "\n";
+                  precise_number(machine.vibration_rms) + "|" +
+                  precise_number(machine.temperature_c) + "|" +
+                  precise_number(machine.degradation_index) + "\n";
     }
     for (const auto& [id, product] : state_.products) {
         result += "product|" + id.value + "|" + product.sku + "|" +
@@ -532,20 +538,20 @@ std::string IndustrialWorld::snapshot_text() const {
     }
     for (const auto& [id, order] : state_.work_orders) {
         result += "work_order|" + id.value + "|" + order.product.value + "|" +
-                  number(order.quantity_required) + "|" +
-                  number(order.quantity_complete) + "|" +
-                  number(order.scheduled_quantity) + "|" +
+                  precise_number(order.quantity_required) + "|" +
+                  precise_number(order.quantity_complete) + "|" +
+                  precise_number(order.scheduled_quantity) + "|" +
                   std::to_string(order.due_minute) + "|" +
                   to_string(order.state) + "|" + order.assigned_line.value + "\n";
     }
     for (const auto& [id, item] : state_.inventory) {
         result += "inventory|" + id.value + "|" + item.item.value + "|" +
-                  item.location.value + "|" + number(item.on_hand) + "|" +
-                  number(item.reserved) + "|" + number(item.quarantine) + "\n";
+                  item.location.value + "|" + precise_number(item.on_hand) + "|" +
+                  precise_number(item.reserved) + "|" + precise_number(item.quarantine) + "\n";
     }
     for (const auto& [id, warehouse] : state_.warehouses) {
         result += "warehouse|" + id.value + "|" + warehouse.site.value + "|" +
-                  number(warehouse.capacity_units) + "\n";
+                  precise_number(warehouse.capacity_units) + "\n";
     }
     for (const auto& [id, task] : state_.maintenance) {
         result += "maintenance|" + id.value + "|" + task.machine.value + "|" +
@@ -564,7 +570,7 @@ std::string IndustrialWorld::snapshot_text() const {
                   std::to_string(vehicle.delay_minutes) + "\n";
     }
     for (const auto& [id, tariff] : state_.tariffs) {
-        result += "tariff|" + id.value + "|" + number(tariff.multiplier) + "|" +
+        result += "tariff|" + id.value + "|" + precise_number(tariff.multiplier) + "|" +
                   std::to_string(tariff.peak_start) + "\n";
     }
     for (const auto& [id, commitment] : state_.commitments) {
