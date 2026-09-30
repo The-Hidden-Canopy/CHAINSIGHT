@@ -1,6 +1,8 @@
 #include "iag/iag.hpp"
 
 #include <algorithm>
+#include <cctype>
+#include <fstream>
 #include <iomanip>
 #include <sstream>
 #include <utility>
@@ -392,5 +394,286 @@ std::string IndustrialWorld::events_json() const {
     return result;
 }
 
-}  // namespace iag
+std::string to_string(EvidenceKind kind) {
+    switch (kind) {
+        case EvidenceKind::MachineCondition: return "machine_condition";
+        case EvidenceKind::TrafficDelay: return "traffic_delay";
+        case EvidenceKind::EnergyTariff: return "energy_tariff";
+    }
+    return "unknown";
+}
 
+namespace {
+
+std::string trim(std::string value) {
+    while (!value.empty() &&
+           std::isspace(static_cast<unsigned char>(value.front()))) {
+        value.erase(value.begin());
+    }
+    while (!value.empty() &&
+           std::isspace(static_cast<unsigned char>(value.back()))) {
+        value.pop_back();
+    }
+    return value;
+}
+
+std::string after_colon(const std::string& line) {
+    const auto position = line.find(':');
+    return position == std::string::npos ? std::string{} :
+           trim(line.substr(position + 1));
+}
+
+double parse_number(const std::string& value, bool& ok) {
+    try {
+        std::size_t used = 0;
+        const double number = std::stod(value, &used);
+        ok = used == value.size();
+        return number;
+    } catch (...) {
+        ok = false;
+        return 0.0;
+    }
+}
+
+SimMinute parse_time(const std::string& value, bool& ok) {
+    const auto first = value.find(':');
+    const auto second = value.find(':', first + 1);
+    if (first == std::string::npos || second == std::string::npos) {
+        ok = false;
+        return 0;
+    }
+    bool hour_ok = false;
+    bool minute_ok = false;
+    bool second_ok = false;
+    const auto hour = parse_number(value.substr(0, first), hour_ok);
+    const auto minute =
+        parse_number(value.substr(first + 1, second - first - 1), minute_ok);
+    const auto seconds = parse_number(value.substr(second + 1), second_ok);
+    ok = hour_ok && minute_ok && second_ok;
+    return ok ? static_cast<SimMinute>(hour * 60.0 + minute + seconds / 60.0)
+              : 0;
+}
+
+}  // namespace
+
+ScenarioDefinition load_scenario_file(std::string_view path, std::string& error) {
+    std::ifstream input{std::string(path)};
+    if (!input) {
+        error = "SCENARIO_NOT_FOUND:" + std::string(path);
+        return {};
+    }
+
+    ScenarioDefinition scenario;
+    std::string line;
+    ScenarioEvent pending;
+    bool have_pending = false;
+    auto flush = [&]() {
+        if (have_pending) {
+            scenario.events.push_back(pending);
+            pending = ScenarioEvent{};
+            have_pending = false;
+        }
+    };
+
+    while (std::getline(input, line)) {
+        line = trim(line);
+        if (line.empty() || line.front() == '#') continue;
+        if (line.rfind("scenario:", 0) == 0) {
+            scenario.name = after_colon(line);
+        } else if (line.rfind("seed:", 0) == 0) {
+            bool ok = false;
+            scenario.seed = static_cast<std::uint64_t>(parse_number(after_colon(line), ok));
+            if (!ok) {
+                error = "INVALID_SCENARIO_SEED";
+                return {};
+            }
+        } else if (line.rfind("- at:", 0) == 0) {
+            flush();
+            pending = ScenarioEvent{};
+            have_pending = true;
+            bool ok = false;
+            pending.at = parse_time(trim(line.substr(line.find("at:") + 3)), ok);
+            if (!ok) {
+                error = "INVALID_SCENARIO_TIME";
+                return {};
+            }
+        } else if (line.find("type: machine_condition") != std::string::npos) {
+            if (!have_pending) {
+                pending = ScenarioEvent{};
+                have_pending = true;
+            }
+            pending.kind = EvidenceKind::MachineCondition;
+        } else if (line.find("type: traffic_delay") != std::string::npos) {
+            if (!have_pending) {
+                pending = ScenarioEvent{};
+                have_pending = true;
+            }
+            pending.kind = EvidenceKind::TrafficDelay;
+        } else if (line.find("type: energy_tariff") != std::string::npos) {
+            if (!have_pending) {
+                pending = ScenarioEvent{};
+                have_pending = true;
+            }
+            pending.kind = EvidenceKind::EnergyTariff;
+        } else if (line.rfind("at:", 0) == 0 && have_pending) {
+            bool ok = false;
+            pending.at = parse_time(after_colon(line), ok);
+            if (!ok) {
+                error = "INVALID_SCENARIO_TIME";
+                return {};
+            }
+        } else if (line.rfind("machine:", 0) == 0 && have_pending) {
+            pending.subject = ObjectId{after_colon(line)};
+        } else if (line.rfind("route:", 0) == 0 && have_pending) {
+            pending.subject = ObjectId{after_colon(line)};
+        } else if (line.rfind("site:", 0) == 0 && have_pending) {
+            pending.subject = ObjectId{after_colon(line)};
+        } else if (line.rfind("vibration_rms:", 0) == 0 && have_pending) {
+            bool ok = false;
+            pending.value = parse_number(after_colon(line), ok);
+            if (!ok) {
+                error = "INVALID_VIBRATION_VALUE";
+                return {};
+            }
+        } else if (line.rfind("delay_minutes:", 0) == 0 && have_pending) {
+            bool ok = false;
+            pending.value = parse_number(after_colon(line), ok);
+            if (!ok) {
+                error = "INVALID_DELAY_VALUE";
+                return {};
+            }
+        } else if (line.rfind("multiplier:", 0) == 0 && have_pending) {
+            bool ok = false;
+            pending.value = parse_number(after_colon(line), ok);
+            if (!ok) {
+                error = "INVALID_MULTIPLIER_VALUE";
+                return {};
+            }
+        }
+    }
+    flush();
+    if (scenario.name.empty() || scenario.events.empty()) {
+        error = "SCENARIO_MISSING_NAME_OR_EVENTS";
+        return {};
+    }
+    return scenario;
+}
+
+bool run_scenario_events(IndustrialWorld& world,
+                         const ScenarioDefinition& scenario,
+                         std::vector<EvidenceItem>& evidence,
+                         std::vector<Finding>& findings,
+                         std::string& error) {
+    std::uint64_t sequence = 0;
+    for (const auto& event : scenario.events) {
+        ++sequence;
+        EvidenceItem item;
+        item.id = "E-" + std::to_string(sequence);
+        item.source = event.kind == EvidenceKind::MachineCondition
+                          ? "sim.telemetry"
+                          : event.kind == EvidenceKind::TrafficDelay
+                                ? "sim.traffic"
+                                : "sim.energy";
+        item.kind = event.kind;
+        item.subject = event.subject;
+        item.observed_at = event.at;
+        item.sequence = sequence;
+        item.value = event.value;
+        item.quality = Quality::Valid;
+        item.raw_hash = digest(item.source + "|" + item.subject.value + "|" +
+                               std::to_string(item.observed_at) + "|" +
+                               std::to_string(item.value));
+
+        Mutation mutation;
+        if (event.kind == EvidenceKind::MachineCondition) {
+            mutation = Mutation{MutationKind::SetMachineCondition, event.subject, {},
+                                event.value, 50.0 + event.value * 2.0, 0.0,
+                                event.at, item.id};
+        } else if (event.kind == EvidenceKind::TrafficDelay) {
+            mutation = Mutation{MutationKind::SetTrafficDelay, {"T-7"}, {},
+                                event.value, 0.0, 0.0, event.at, item.id};
+        } else {
+            mutation = Mutation{MutationKind::SetEnergyMultiplier, event.subject, {},
+                                event.value, 0.0, 0.0, event.at, item.id};
+        }
+
+        const auto revision = world.revision();
+        if (!world.commit(revision, {mutation}, error)) {
+            return false;
+        }
+        evidence.push_back(std::move(item));
+    }
+
+    const auto machine_it = world.state().machines.find(ObjectId{"M-12"});
+    if (machine_it != world.state().machines.end()) {
+        std::vector<std::string> supporting;
+        double first_value = 0.0;
+        SimMinute first_time = 0;
+        double latest_value = 0.0;
+        SimMinute latest_time = 0;
+        bool first = true;
+        for (const auto& item : evidence) {
+            if (item.kind == EvidenceKind::MachineCondition &&
+                item.subject == ObjectId{"M-12"}) {
+                if (first) {
+                    first_value = item.value;
+                    first_time = item.observed_at;
+                    first = false;
+                }
+                latest_value = item.value;
+                latest_time = item.observed_at;
+                supporting.push_back(item.id);
+            }
+        }
+        if (!supporting.empty()) {
+            const double slope = latest_time == first_time
+                                     ? 0.0
+                                     : (latest_value - first_value) /
+                                           static_cast<double>(latest_time - first_time);
+            findings.push_back(Finding{"F-HEALTH-M12", "degradation_trend",
+                                       {"M-12"}, slope, 0.98, supporting,
+                                       "Vibration is rising; the finding is derived from admitted telemetry."});
+            findings.push_back(Finding{"F-FORECAST-M12", "failure_forecast",
+                                       {"M-12"}, machine_it->second.degradation_index,
+                                       0.91, supporting,
+                                       "Forecast is predicted state, not observed failure truth."});
+        }
+    }
+    return true;
+}
+
+std::string evidence_jsonl(const std::vector<EvidenceItem>& evidence) {
+    std::string result;
+    for (const auto& item : evidence) {
+        result += "{\"id\":" + quote(item.id) + ",\"source\":" +
+                  quote(item.source) + ",\"kind\":" +
+                  quote(to_string(item.kind)) + ",\"subject\":" +
+                  object_id(item.subject) + ",\"observed_at\":" +
+                  std::to_string(item.observed_at) + ",\"sequence\":" +
+                  std::to_string(item.sequence) + ",\"value\":" +
+                  number(item.value) + ",\"quality\":" +
+                  quote(to_string(item.quality)) + ",\"raw_hash\":" +
+                  quote(item.raw_hash) + "}\n";
+    }
+    return result;
+}
+
+std::string findings_jsonl(const std::vector<Finding>& findings) {
+    std::string result;
+    for (const auto& finding : findings) {
+        result += "{\"id\":" + quote(finding.id) + ",\"kind\":" +
+                  quote(finding.kind) + ",\"subject\":" +
+                  object_id(finding.subject) + ",\"value\":" +
+                  number(finding.value) + ",\"confidence\":" +
+                  number(finding.confidence) + ",\"explanation\":" +
+                  quote(finding.explanation) + ",\"evidence_ids\":[";
+        for (std::size_t index = 0; index < finding.evidence_ids.size(); ++index) {
+            if (index > 0) result += ',';
+            result += quote(finding.evidence_ids[index]);
+        }
+        result += "]}\n";
+    }
+    return result;
+}
+
+}  // namespace iag

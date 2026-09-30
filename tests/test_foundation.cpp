@@ -1,6 +1,7 @@
 #include "iag/iag.hpp"
 
 #include <cstdlib>
+#include <filesystem>
 #include <iostream>
 
 namespace {
@@ -43,6 +44,36 @@ int main() {
     check(error.find("STALE_REVISION") == 0, "stale revision has explicit error");
     check(world.events().size() == 1, "journal records committed event");
 
-    std::cout << "world foundation tests passed\n";
-}
+    std::string scenario_error;
+    const auto scenario_path =
+        std::filesystem::path(__FILE__).parent_path().parent_path() /
+        "scenarios" / "bearing_failure_compound.yaml";
+    const auto scenario =
+        iag::load_scenario_file(scenario_path.string(), scenario_error);
+    check(scenario_error.empty(), "canonical scenario parses");
+    check(scenario.name == "bearing_failure_compound",
+          "scenario name is preserved");
+    check(scenario.seed == 99117, "scenario seed is preserved");
+    check(scenario.events.size() == 4, "scenario has four deterministic events");
+    check(scenario.events.at(1).at == 30, "scenario time is parsed");
 
+    auto scenario_world = iag::IndustrialWorld::synthetic_enterprise();
+    std::vector<iag::EvidenceItem> evidence;
+    std::vector<iag::Finding> findings;
+    check(iag::run_scenario_events(scenario_world, scenario, evidence, findings,
+                                   scenario_error),
+          "scenario events admit");
+    check(evidence.size() == 4, "all scenario events become evidence");
+    check(findings.size() == 2, "trend and forecast findings are derived");
+    check(scenario_world.state().vehicles.at({"T-7"}).delay_minutes == 45,
+          "traffic evidence updates vehicle belief");
+    check(scenario_world.state().tariffs.at({"SITE-01"}).multiplier == 2.2,
+          "energy evidence updates tariff belief");
+    check(evidence.front().quality == iag::Quality::Valid,
+          "evidence quality is explicit");
+    check(iag::evidence_jsonl(evidence).find("\"sequence\":1") !=
+              std::string::npos,
+          "evidence output preserves sequence");
+
+    std::cout << "world and evidence tests passed\n";
+}

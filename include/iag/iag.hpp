@@ -3,6 +3,7 @@
 #include "iag/core/types.hpp"
 
 #include <cstddef>
+#include <cstdint>
 #include <map>
 #include <string>
 #include <string_view>
@@ -178,6 +179,59 @@ struct WorldEvent {
     std::string detail;
 };
 
+enum class EvidenceKind {
+    MachineCondition,
+    TrafficDelay,
+    EnergyTariff,
+};
+
+struct EvidenceItem {
+    std::string id;
+    std::string source;
+    EvidenceKind kind{EvidenceKind::MachineCondition};
+    ObjectId subject;
+    SimMinute observed_at{0};
+    std::uint64_t sequence{0};
+    double value{0.0};
+    double secondary_value{0.0};
+    Quality quality{Quality::Valid};
+    std::string raw_hash;
+};
+
+struct Finding {
+    std::string id;
+    std::string kind;
+    ObjectId subject;
+    double value{0.0};
+    double confidence{0.0};
+    std::vector<std::string> evidence_ids;
+    std::string explanation;
+};
+
+struct ScenarioEvent {
+    SimMinute at{0};
+    EvidenceKind kind{EvidenceKind::MachineCondition};
+    ObjectId subject;
+    double value{0.0};
+    double secondary_value{0.0};
+};
+
+struct ScenarioDefinition {
+    std::string name;
+    std::uint64_t seed{0};
+    std::vector<ScenarioEvent> events;
+};
+
+std::string to_string(EvidenceKind kind);
+ScenarioDefinition load_scenario_file(std::string_view path, std::string& error);
+bool run_scenario_events(IndustrialWorld& world,
+                         const ScenarioDefinition& scenario,
+                         std::vector<EvidenceItem>& evidence,
+                         std::vector<Finding>& findings,
+                         std::string& error);
+std::string evidence_jsonl(const std::vector<EvidenceItem>& evidence);
+std::string findings_jsonl(const std::vector<Finding>& findings);
+
 class IndustrialWorld {
 public:
     static IndustrialWorld synthetic_enterprise();
@@ -205,4 +259,3 @@ private:
 };
 
 }  // namespace iag
-
