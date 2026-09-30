@@ -18,7 +18,7 @@ add_library(chainsight_core
 )
 target_include_directories(chainsight_core
     PUBLIC
-        \${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 target_compile_features(chainsight_core PUBLIC cxx_std_23)
 
