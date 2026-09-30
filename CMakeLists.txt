@@ -14,6 +14,7 @@ option(CHAINSIGHT_BUILD_TESTS "Build CHAINSIGHT tests" ON)
 
 add_library(chainsight_core
     src/iag.cpp
+    src/operations.cpp
 )
 target_include_directories(chainsight_core
     PUBLIC
@@ -40,4 +41,3 @@ if(CHAINSIGHT_BUILD_TESTS)
     target_link_libraries(iag_tests PRIVATE chainsight_core)
     add_test(NAME iag_tests COMMAND iag_tests)
 endif()
-

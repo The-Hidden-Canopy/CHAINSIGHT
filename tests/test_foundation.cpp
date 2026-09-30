@@ -1,4 +1,5 @@
 #include "iag/iag.hpp"
+#include "iag/operations.hpp"
 
 #include <cstdlib>
 #include <filesystem>
@@ -75,5 +76,40 @@ int main() {
               std::string::npos,
           "evidence output preserves sequence");
 
-    std::cout << "world and evidence tests passed\n";
+    const auto planning =
+        iag::generate_plan_candidates(scenario_world, findings);
+    check(planning.candidates.size() == 4, "planner generates alternatives");
+    check(planning.selected_candidate_id == "C",
+          "planner selects the balanced candidate");
+    check(!planning.candidates.at(3).hard_constraints_ok,
+          "hard constraint rejection is explicit");
+    check(planning.candidates.at(3).violations.at(0).find("FIXTURE_NOT_QUALIFIED") ==
+              0,
+          "rejected candidate preserves constraint reason");
+
+    const auto& selected = planning.candidates.at(2);
+    const auto& step = selected.steps.front();
+    const iag::ActionRequest request{
+        "AR-C", "planner", step.action, selected.id, step.subject,
+        step.destination, step.quantity, scenario_world.revision(),
+        "contain degradation"};
+    const auto decision = iag::govern(scenario_world, selected, request);
+    check(decision.action == iag::GovernanceAction::Allow,
+          "bounded split move is allowed");
+    iag::SimulatedExecutionAdapter adapter;
+    const auto execution = adapter.dispatch(scenario_world, decision, request);
+    check(execution.dispatched && execution.verified,
+          "simulated execution is verified");
+    check(scenario_world.revision() == 5,
+          "execution advances the world after four evidence commits");
+    const auto replay = adapter.dispatch(scenario_world, decision, request);
+    check(replay.status == "IDEMPOTENT_REPLAY",
+          "repeated action is idempotent");
+
+    const auto denied_decision =
+        iag::govern(scenario_world, planning.candidates.at(3), request);
+    check(denied_decision.action == iag::GovernanceAction::Deny,
+          "denied candidate cannot be governed");
+
+    std::cout << "world, evidence, planning, and execution tests passed\n";
 }
