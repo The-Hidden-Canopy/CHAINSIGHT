@@ -208,6 +208,7 @@ std::string to_string(GovernanceAction action) {
 GovernanceDecision govern(const IndustrialWorld& world,
                           const PlanCandidate& candidate,
                           const ActionRequest& request) {
+    (void)world;
     GovernanceDecision decision;
     decision.id = "GD-" + request.id;
     decision.policy_epoch = "policy.reschedule.production@17";
@@ -241,19 +242,21 @@ GovernanceDecision govern(const IndustrialWorld& world,
 
 std::string decision_json(const GovernanceDecision& decision,
                           const ActionRequest& request) {
-    std::string output{"{\n  \"id\":" + quote(decision.id) +
-                       ",\n  \"action\":" + quote(to_string(decision.action)) +
-                       ",\n  \"policy_epoch\":" + quote(decision.policy_epoch) +
-                       ",\n  \"decision_hash\":" + quote(decision.decision_hash) +
-                       ",\n  \"request\":{\"id\":" + quote(request.id) +
-                       ",\"actor\":" + quote(request.actor) +
-                       ",\"action\":" + quote(request.action) +
-                       ",\"candidate_id\":" + quote(request.candidate_id) +
-                       ",\"subject\":" + quote(request.subject.value) +
-                       ",\"destination\":" + quote(request.destination.value) +
-                       ",\"quantity\":" + number(request.quantity) +
-                       ",\"expected_revision\":" +
-                       std::to_string(request.expected_revision) + "},\n  \"reasons\":[";
+    std::string output{"{\n  \"id\":"};
+    output += quote(decision.id);
+    output += ",\n  \"action\":" + quote(to_string(decision.action));
+    output += ",\n  \"policy_epoch\":" + quote(decision.policy_epoch);
+    output += ",\n  \"decision_hash\":" + quote(decision.decision_hash);
+    output += ",\n  \"request\":{\"id\":" + quote(request.id);
+    output += ",\"actor\":" + quote(request.actor);
+    output += ",\"action\":" + quote(request.action);
+    output += ",\"candidate_id\":" + quote(request.candidate_id);
+    output += ",\"subject\":" + quote(request.subject.value);
+    output += ",\"destination\":" + quote(request.destination.value);
+    output += ",\"quantity\":" + number(request.quantity);
+    output += ",\"expected_revision\":" +
+              std::to_string(request.expected_revision);
+    output += "},\n  \"reasons\":[";
     for (std::size_t index = 0; index < decision.reasons.size(); ++index) {
         if (index > 0) output += ',';
         output += quote(decision.reasons[index]);
@@ -411,4 +414,3 @@ std::string report_markdown(
 }
 
 }  // namespace iag
-
